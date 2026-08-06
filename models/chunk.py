@@ -3,6 +3,11 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from PIL import Image
 
+class ChunkType(str, Enum):
+    """Enum for the different types of content chunks."""
+    TEXT = "text"
+    TABLE = "table"
+    IMAGE = "image"
 
 class Chunk(BaseModel):
     chunk_type: ChunkType = Field(description="The type of content in the chunk.")
@@ -14,8 +19,3 @@ class Chunk(BaseModel):
     summary: Optional[str] = Field(None, description="The summary of the chunk content")
     embedding: Optional[list[float]] = Field(None, description="The vector embedding representation of the summary")
 
-class ChunkType(str, Enum):
-    """Enum for the different types of content chunks."""
-    TEXT = "text"
-    TABLE = "table"
-    IMAGE = "image"

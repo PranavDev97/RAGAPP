@@ -29,12 +29,19 @@ async def Chunk(file_source : FileSource):
     converted_info = await _convert_to_docling_file(file_source)
     docling_file = converted_info.document
 
-    for chunk in chunker.chunk(docling_file):
-        print("\n")
-        chunk_contextualised = chunker.contextualize(chunk=chunk)
-        print(chunk_contextualised)
-        print(vars(chunk.meta))
-        print("\n")
+    # get table chunks
+    table_chunks = _get_table_chunks(docling_file=docling_file)
+    # get image chunks
+    image_chunks = _get_image_chunks(docling_file=docling_file)
+    # get text chunks
+    text_chunks = _get_text_chunks(chunker=chunker, docling_file=docling_file)
+
+    all_chunks = list(ChunkData)
+    all_chunks.extend(table_chunks)
+    all_chunks.extend(image_chunks)
+    all_chunks.extend(text_chunks)
+
+
 
 def _create_chunker() -> HybridChunker:
     # check if a tokenizer is needed if we are not actually embedding the chunk text
@@ -61,21 +68,53 @@ async def _convert_to_docling_file(file_source : FileSource) -> ConversionResult
 
 def _get_text_chunks(chunker : HybridChunker, docling_file : DoclingDocument) -> list[ChunkData]:
     # remove the items which are not text items from docling document before chunking to keep text chunks purely of text items
-    non_text_items = list()
-    for item in docling_file.iterate_items():
-        if not isinstance(item, TextItem):
-            non_text_items.append(item)
-    docling_file.delete_items(node_items=non_text_items)
-    
-    chunks = []
-    for chunk in chunker.chunk(dl_doc=docling_file):
-        # find page number
-        page_no = 1
-        meta = chunk.meta
-        if hasattr(meta,"doc_items") and meta.doc_items:
-            doc_item = meta.doc_items[0]
-            if hasattr(doc_item,"prov") and doc_item.prov:
-                page_no = doc_item.prov.page_no 
+    try:
+        non_text_items =  non_text_items = [
+            item
+            for item in docling_file.iterate_items()
+            if not isinstance(item, TextItem)
+        ]
+        docling_file.delete_items(node_items=non_text_items)
+    except Exception as e:
+        logger.error("_get_text_chunks : error deleting non text items", extra={"error": str(e)})
+        raise
+
+    try:
+        chunks = []
+        for chunk in chunker.chunk(dl_doc=docling_file):
+            # find page number and bbox
+            page_no = 1
+            bbox = None
+            meta = chunk.meta
+            if hasattr(meta,"doc_items") and meta.doc_items:
+                doc_item = meta.doc_items[0]
+                if hasattr(doc_item,"prov") and doc_item.prov:
+                    page_no = doc_item.prov.page_no 
+
+                    bbox_obj = doc_item.prov.bbox
+                    if all(hasattr(bbox_obj, attr) for attr in ["l", "t", "r", "b"]):
+                        bbox = [
+                            float(bbox_obj.l),
+                            float(bbox_obj.t),
+                            float(bbox_obj.r),
+                            float(bbox_obj.b),
+                        ]
+
+            text = getattr(chunk, "text", None)
+
+            chunk = ChunkData(
+                chunk_type=ChunkType.TEXT,
+                text_content=text,
+                page_no=page_no,
+                bbox=bbox
+            )
+            chunks.append(chunk)
+
+        return chunks
+    except Exception as e:
+        logger.error("_get_text_chunks : error extracting text chunks", extra={"error" : str(e)})
+        raise
+        
 
 def _get_table_chunks(docling_file : DoclingDocument) -> list[ChunkData]:
     try:
@@ -88,7 +127,6 @@ def _get_table_chunks(docling_file : DoclingDocument) -> list[ChunkData]:
                     prov = item.prov[0]
                     page_no = prov.page_no
 
-
                 # Get bounding box data
                 bbox = _get_item_bbox(item=item)
 
@@ -98,7 +136,7 @@ def _get_table_chunks(docling_file : DoclingDocument) -> list[ChunkData]:
 
                 chunk = ChunkData(
                     chunk_type=ChunkType.TABLE,
-                    table_chunk=table_data,
+                    table_content_markdown=table_data,
                     page_no=page_no,
                     bbox=bbox
                 )
@@ -106,7 +144,7 @@ def _get_table_chunks(docling_file : DoclingDocument) -> list[ChunkData]:
                 chunks.append(chunk)
         return chunks
     except Exception as e:
-        logger.error("Failed to extract table markdown", extra={"error": str(e)})
+        logger.error("_get_table_chunks : error getting table markdown", extra={"error": str(e)})
         raise
 
 def _extract_table_markdown_from_item(item : TableItem, docling_file : DoclingDocument)-> str:
@@ -124,10 +162,10 @@ def _extract_table_markdown_from_item(item : TableItem, docling_file : DoclingDo
             markdown = df.to_markdown(index=False, tablefmt="github")
             return markdown
         else:
-            logger.warning("TableItem has no method export_to_dataframe. Skipping extraction of table data")
+            logger.warning("_extract_table_markdown_from_item : TableItem has no method export_to_dataframe. Skipping extraction of table data")
             return None
     except Exception as e:
-            logger.error("Failed to extract table markdown", extra={"error": str(e)})
+            logger.error("_extract_table_markdown_from_item : error extracting table markdown", extra={"error": str(e)})
             raise
 
 def _get_image_chunks(docling_file : DoclingDocument) -> list[ChunkData]:
@@ -158,7 +196,7 @@ def _get_image_chunks(docling_file : DoclingDocument) -> list[ChunkData]:
                 chunks.append(chunk)
         return chunks
     except Exception as e:
-            logger.error("Failed to extract image", extra={"error": str(e)})
+            logger.error("_get_image_chunks : error getting image", extra={"error": str(e)})
             raise
 
 def _extract_image_from_item(item: PictureItem, docling_file : DoclingDocument) -> Optional[Image.Image]:
@@ -172,7 +210,7 @@ def _extract_image_from_item(item: PictureItem, docling_file : DoclingDocument) 
                 logger.warning("PictureItem has no get_image method. Skipping extraction of image")
                 return None
         except Exception as e:
-            logger.error("Failed to extract image", extra={"error": str(e)})
+            logger.error("_extract_image_from_item : error extracting image", extra={"error": str(e)})
             raise
 
 def _get_item_bbox(self, item: DocItem) -> list[float]:
