@@ -1,2 +1,4 @@
 __pycache__/
 venv/
+conf/local.env
+files/chat

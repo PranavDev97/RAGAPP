@@ -1,6 +1,8 @@
 CREATE TABLE document_source (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
+    file_path TEXT NOT NULL, 
+    content_summary TEXT NOT NULL,
     created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
 
@@ -9,8 +11,9 @@ CREATE TABLE document_chunk (
     doc_id int REFERENCES document_source(id) ON DELETE CASCADE,
     chunk_index INT NOT NULL,
     chunk_text TEXT NOT NULL,
+    chunk_type TEXT NOT NULL,
     chunk_summary TEXT NOT NULL,
-    chunk_embedding VECTOR(512)
-)
+    chunk_embedding VECTOR(768)
+);
 
 CREATE INDEX idx_document_chunk_embedding ON document_chunk USING hnsw(chunk_embedding vector_cosine_ops)

@@ -1,5 +1,6 @@
 import io
 import logging
+from PIL import Image
 from docling.chunking import HybridChunker
 from docling.document_converter import DocumentConverter
 from docling.datamodel.base_models import DocumentStream
@@ -9,7 +10,7 @@ from docling_core.types.doc import (
     TableItem,
     PictureItem,
     TextItem,
-    DocItem
+    DocItem,
 )
 from models.chunk import (
     Chunk as ChunkData,
@@ -17,14 +18,18 @@ from models.chunk import (
 )
 from models.file import FileSource
 
+
 logger = logging.getLogger(__name__)
+
 
 TOKENIZER_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 MAX_TOKENIZER_TOKENS = 256
 CHUNK_SIZE = 400
 CHUNK_OVERLAP = 50
 
-async def Chunk(file_source : FileSource):
+
+
+async def chunk(file_source : FileSource) -> list[ChunkData]:
     chunker = _create_chunker()
     converted_info = await _convert_to_docling_file(file_source)
     docling_file = converted_info.document
@@ -36,10 +41,15 @@ async def Chunk(file_source : FileSource):
     # get text chunks
     text_chunks = _get_text_chunks(chunker=chunker, docling_file=docling_file)
 
-    all_chunks = list(ChunkData)
+    all_chunks = []
     all_chunks.extend(table_chunks)
     all_chunks.extend(image_chunks)
     all_chunks.extend(text_chunks)
+
+    # sort chunks in reading order
+    all_chunks.sort(key=_get_chunk_sort_key)
+
+    return all_chunks
 
 
 
@@ -50,28 +60,29 @@ def _create_chunker() -> HybridChunker:
         max_tokens=MAX_TOKENIZER_TOKENS,
         chunk_size=CHUNK_SIZE,
         chunk_overlap=CHUNK_OVERLAP, 
-        merge_peers=False,
+        merge_peers=True,
     )
 
     return chunker
 
+
+
 async def _convert_to_docling_file(file_source : FileSource) -> ConversionResult:
     converter = DocumentConverter()
-
-    pdf_stream = io.BytesIO(file_source.content)
     try:
-        doc_stream = DocumentStream(name=file_source.name, stream=pdf_stream)
-        result = converter.convert(doc_stream)
+        result = converter.convert(file_source.file_path)
         return result
-    finally:
-        pdf_stream.close()
+    except Exception as e:
+        logger.error("_convert_to_docling_file : error converting to docling file", extra={"error" : str(e)})
+
+
 
 def _get_text_chunks(chunker : HybridChunker, docling_file : DoclingDocument) -> list[ChunkData]:
     # remove the items which are not text items from docling document before chunking to keep text chunks purely of text items
     try:
-        non_text_items =  non_text_items = [
+        non_text_items = [
             item
-            for item in docling_file.iterate_items()
+            for item, _level in docling_file.iterate_items()
             if not isinstance(item, TextItem)
         ]
         docling_file.delete_items(node_items=non_text_items)
@@ -89,9 +100,10 @@ def _get_text_chunks(chunker : HybridChunker, docling_file : DoclingDocument) ->
             if hasattr(meta,"doc_items") and meta.doc_items:
                 doc_item = meta.doc_items[0]
                 if hasattr(doc_item,"prov") and doc_item.prov:
-                    page_no = doc_item.prov.page_no 
+                    prov = doc_item.prov[0]
+                    page_no = prov.page_no 
 
-                    bbox_obj = doc_item.prov.bbox
+                    bbox_obj = prov.bbox
                     if all(hasattr(bbox_obj, attr) for attr in ["l", "t", "r", "b"]):
                         bbox = [
                             float(bbox_obj.l),
@@ -116,10 +128,11 @@ def _get_text_chunks(chunker : HybridChunker, docling_file : DoclingDocument) ->
         raise
         
 
+
 def _get_table_chunks(docling_file : DoclingDocument) -> list[ChunkData]:
     try:
         chunks = list()
-        for item in docling_file.iterate_items():
+        for item, _level in docling_file.iterate_items():
             if isinstance(item, TableItem):
                 # Get page number, defaults to 1 if no page number is found
                 page_no = 1
@@ -147,6 +160,8 @@ def _get_table_chunks(docling_file : DoclingDocument) -> list[ChunkData]:
         logger.error("_get_table_chunks : error getting table markdown", extra={"error": str(e)})
         raise
 
+
+
 def _extract_table_markdown_from_item(item : TableItem, docling_file : DoclingDocument)-> str:
     """
         Extract table data in markdown representation from TableItem
@@ -159,7 +174,7 @@ def _extract_table_markdown_from_item(item : TableItem, docling_file : DoclingDo
 
             df=df.fillna("")
 
-            markdown = df.to_markdown(index=False, tablefmt="github")
+            markdown = df.to_markdown(index=False)
             return markdown
         else:
             logger.warning("_extract_table_markdown_from_item : TableItem has no method export_to_dataframe. Skipping extraction of table data")
@@ -168,10 +183,12 @@ def _extract_table_markdown_from_item(item : TableItem, docling_file : DoclingDo
             logger.error("_extract_table_markdown_from_item : error extracting table markdown", extra={"error": str(e)})
             raise
 
+
+
 def _get_image_chunks(docling_file : DoclingDocument) -> list[ChunkData]:
     try:
         chunks = list()
-        for item in docling_file.iterate_items():
+        for item, _level in docling_file.iterate_items():
             if isinstance(item, PictureItem):
                 # Get page number, defaults to 1 if no page number is found
                 page_no = 1
@@ -199,7 +216,9 @@ def _get_image_chunks(docling_file : DoclingDocument) -> list[ChunkData]:
             logger.error("_get_image_chunks : error getting image", extra={"error": str(e)})
             raise
 
-def _extract_image_from_item(item: PictureItem, docling_file : DoclingDocument) -> Optional[Image.Image]:
+
+
+def _extract_image_from_item(item: PictureItem, docling_file : DoclingDocument) -> Image.Image:
         """
         Extract PIL Image from PictureItem.
         """
@@ -213,16 +232,35 @@ def _extract_image_from_item(item: PictureItem, docling_file : DoclingDocument) 
             logger.error("_extract_image_from_item : error extracting image", extra={"error": str(e)})
             raise
 
-def _get_item_bbox(self, item: DocItem) -> list[float]:
+
+
+def _get_item_bbox(item: DocItem) -> list[float]:
         if hasattr(item, "prov") and len(item.prov) > 0:
             prov = item.prov[0]
             if hasattr(prov, "bbox"):
                 bbox = prov.bbox
                 if all(hasattr(bbox, attr) for attr in ["l", "t", "r", "b"]):
-                    # Return as [left, top, right, bottom]
+                    # Return as [left(x0), top(y0), right(x1), bottom(y1)]
                     return [float(bbox.l), float(bbox.t), float(bbox.r), float(bbox.b)]
 
         return None
+
+
+
+def _get_chunk_sort_key(
+        chunk: ChunkData
+    ) -> tuple[int, float, float]:
+        """
+        Generate sort key according to natural reading order.
+        """
+        if chunk.bbox:
+            left_x_coord = chunk.bbox[0]
+            top_y_coord = chunk.bbox[1]
+        else:
+            left_x_coord = float("inf")
+            top_y_coord = float("inf")
+
+        return (chunk.page_no, top_y_coord, left_x_coord)
 
 
 

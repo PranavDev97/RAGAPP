@@ -1,7 +1,8 @@
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional
 from PIL import Image
+
 
 class ChunkType(str, Enum):
     """Enum for the different types of content chunks."""
@@ -10,6 +11,7 @@ class ChunkType(str, Enum):
     IMAGE = "image"
 
 class Chunk(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     chunk_type: ChunkType = Field(description="The type of content in the chunk.")
     text_content: Optional[str] = Field(None, description="The text content. An explanation of the content is provided for table and image chunks")
     table_content_markdown: Optional[str] = Field(None, description="The Markdown table representation for table chunks")
