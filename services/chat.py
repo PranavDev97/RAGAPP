@@ -1,3 +1,4 @@
+import asyncio
 from models.file import FileSource
 from models.chunk import Chunk
 from pathlib import Path
@@ -34,13 +35,13 @@ async def upload_and_process(file_source: FileSource) -> int:
     file_source.content_summary = await summarize_file(file_source=file_source)
 
     # Create chunks
-    chunks = await chunk(file_source=file_source)
+    chunks = await asyncio.to_thread(chunk, file_source)
 
     # Summarize chunks
     await summarize_chunks(chunks=chunks, file_source=file_source)
 
     # Create chunk summary embeddings
-    await create_chunk_summary_embeddings(chunks=chunks)
+    create_chunk_summary_embeddings(chunks=chunks)
 
     doc_id = await _insert_processed_file_data_to_db(file_source=file_source, chunks=chunks)
 
@@ -60,16 +61,30 @@ async def _insert_processed_file_data_to_db(file_source: FileSource, chunks: lis
 
 
 
-async def chat(question: str, doc_id: int) -> tuple[str, list[int]]:
+async def chat(question: str, doc_id: int) -> tuple[str, list[tuple[int, float]]]:
+    semantic_chunk_texts, semantic_chunk_meta, use_search_statement = await semantic_search(question=question, doc_id=doc_id)
+    if use_search_statement:
+         return semantic_chunk_texts[0], None
+
+    answer = await get_answer(
+        question=question,
+        chunk_texts=semantic_chunk_texts
+    )
+
+    return answer, semantic_chunk_meta
+
+
+
+async def semantic_search(question: str, doc_id: int) -> tuple[list[str], list[tuple[int, float]], bool]:
     file_summary = await get_file_summary(doc_id=doc_id)
 
     search_statement_info = await generate_search_statement(question=question, summary=file_summary)
 
     # if the generated search statement has a high confidence score return the statement w/o further retrieval
     if search_statement_info.confidence_score > 0.8:
-            return search_statement_info.statement, None
+            return [search_statement_info.statement], None, True
 
-    hyde = await create_search_statement_embedding(search_statement=search_statement_info.statement)
+    hyde = create_search_statement_embedding(search_statement=search_statement_info.statement)
 
     chunk_info = await get_chunks_by_similarity(
         doc_id=doc_id,
@@ -79,13 +94,8 @@ async def chat(question: str, doc_id: int) -> tuple[str, list[int]]:
     chunk_texts = [c[1] for c in chunk_info ]
 
     if not chunk_texts:
-        return None, None
+        return None, None, False
 
-    answer = await get_answer(
-        question=question,
-        chunk_texts=chunk_texts
-    )
+    chunk_meta = [(c[0],c[2]) for c in chunk_info]    
 
-    chunk_meta = [(c[0],c[2]) for c in chunk_info]
-
-    return answer, chunk_meta
+    return chunk_texts, chunk_meta, False

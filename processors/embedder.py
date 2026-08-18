@@ -20,7 +20,7 @@ async def create_embed_model():
 
 
 
-async def _create_embedding(content: list[str], prompt_name: str) -> list[list[float]]:
+def _create_embedding(content: list[str], prompt_name: str) -> list[list[float]]:
     embeddings = embed_model.encode(
         content,
         prompt_name=prompt_name
@@ -29,19 +29,20 @@ async def _create_embedding(content: list[str], prompt_name: str) -> list[list[f
 
 
 
-async def create_chunk_summary_embeddings(chunks : list[Chunk]):
-    for chunk in chunks:
-        embeddings = await _create_embedding(content=[chunk.summary], prompt_name=PROMPT_NAME_PASSAGE)
-        chunk.embedding = embeddings[0]
+def create_chunk_summary_embeddings(chunks : list[Chunk]):
+    summaries = [chunk.summary for chunk in chunks]
+    embeddings = _create_embedding(content=summaries, prompt_name=PROMPT_NAME_PASSAGE)
+    for chunk, embedding in zip(chunks, embeddings):
+        chunk.embedding = embedding
 
 
 
-async def create_question_embedding(question: str) -> list[float]:
-    embeddings = await _create_embedding(content=[question], prompt_name=PROMPT_NAME_QUERY)
+def create_question_embedding(question: str) -> list[float]:
+    embeddings = _create_embedding(content=[question], prompt_name=PROMPT_NAME_QUERY)
     return embeddings[0]
 
 
 
-async def create_search_statement_embedding(search_statement: str) -> list[float]:
-    embeddings = await _create_embedding(content=[search_statement], prompt_name=PROMPT_NAME_PASSAGE)
+def create_search_statement_embedding(search_statement: str) -> list[float]:
+    embeddings = _create_embedding(content=[search_statement], prompt_name=PROMPT_NAME_PASSAGE)
     return embeddings[0]

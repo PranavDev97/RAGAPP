@@ -31,9 +31,9 @@ PDF_IMAGES_SCALE = 2.0
 
 
 
-async def chunk(file_source : FileSource) -> list[ChunkData]:
+def chunk(file_source : FileSource) -> list[ChunkData]:
     chunker = _create_chunker()
-    converted_info = await _convert_to_docling_file(file_source)
+    converted_info = _convert_to_docling_file(file_source)
     docling_file = converted_info.document
 
     # get table chunks
@@ -83,7 +83,7 @@ def _create_converter() -> DocumentConverter:
 
 
 
-async def _convert_to_docling_file(file_source : FileSource) -> ConversionResult:
+def _convert_to_docling_file(file_source : FileSource) -> ConversionResult:
     converter = _create_converter()
     try:
         result = converter.convert(file_source.file_path)

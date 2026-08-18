@@ -42,7 +42,7 @@ async def get_chunks_by_similarity(
     vector: list[float],
     min_similarity: float = 0.5,
     score_gap: float = 0.15,
-) -> list[tuple[int, str]]:
+) -> list[tuple[int, str, float]]:
     """
         Retrieves (chunk_index, chunk_text) for chunks of the given doc_id whose
         cosine similarity to the given vector exceeds min_similarity, then trims

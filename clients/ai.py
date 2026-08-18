@@ -1,3 +1,4 @@
+import httpx
 import asyncio
 import logging
 import mimetypes
@@ -9,6 +10,7 @@ from PIL import Image
 from pydantic import BaseModel
 from google import genai
 from google.genai import types
+from google.genai.errors import ServerError
 from models.chunk import Chunk, ChunkType
 from models.file import FileSource
 from models.ai import SearchStatementAIResponse
@@ -18,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 # constants
+CHUNK_SUMMARY_CONCURRENCY = 4
 CHEAP_MODEL = "gemini-3.5-flash-lite"
 
 
@@ -82,7 +85,7 @@ async def _create_cached_file_content(model: str, system_prompt: str, file_path 
     """
     # upload file
     try:
-        f = ai_client.files.upload(file=file_path)
+        f = await ai_client.aio.files.upload(file=file_path)
         # wait till processing completed
         while f.state.name == "PROCESSING":
             await asyncio.sleep(3)
@@ -93,7 +96,7 @@ async def _create_cached_file_content(model: str, system_prompt: str, file_path 
 
     # create cache using the uploaded file content            
     try:
-        cache = ai_client.caches.create(
+        cache = await ai_client.aio.caches.create(
             model=model,
             config=types.CreateCachedContentConfig(
                 display_name=cache_id,
@@ -126,17 +129,30 @@ async def _generate_content(model: str, messages : list[types.Content],
     if system_instruction:
         config_params["system_instruction"] = system_instruction
 
-    try:
-        response = ai_client.models.generate_content(
-            model=model,
-            contents=messages,
-            config=types.GenerateContentConfig(**config_params)
-        )
+    max_retries = 3
+    retry_count = 0
+    err = None
+    while retry_count < max_retries:
+        try:
+            retry_count += 1
+            response = await ai_client.aio.models.generate_content(
+                model=model,
+                contents=messages,
+                config=types.GenerateContentConfig(**config_params)
+            )
 
-        return response.text
-    except Exception as e:
-        logger.error("_generate_content : error generating content", extra={"error": str(e)})
-        raise
+            return response.text
+        # Retry on network errors and server errors (5xx)
+        except (ServerError, httpx.TimeoutException, httpx.NetworkError, httpx.ConnectError) as e:
+                logger.error("_generate_content :  network/server error ", extra={"error": str(e)})
+                err = Exception(f"Network/Server error: {str(e)}")
+                await asyncio.sleep(4 ** retry_count)  # Exponential backoff
+        except Exception as e:
+            logger.error("_generate_content : error generating content", extra={"error": str(e)})
+            raise
+
+    if err:
+        raise err
 
 
 
@@ -160,7 +176,7 @@ async def _generate_content_structured(model: str, messages: list[types.Content]
         config_params["system_instruction"] = system_instruction
 
     try:
-        response = ai_client.models.generate_content(
+        response = await ai_client.aio.models.generate_content(
             model=model,
             contents=messages,
             config=types.GenerateContentConfig(**config_params)
@@ -203,36 +219,42 @@ async def summarize_chunks(chunks : list[Chunk], file_source: FileSource):
             system_prompt=CHUNK_SUMMARY_SYSTEM_INSTRUCTION,
             file_path=file_source.file_path,
             cache_id=cache_id
-        )    
+        )
 
-        for chunk in chunks:
-            # generate image description before summarizing
-            if chunk.chunk_type == ChunkType.IMAGE:
-                image_description = await _generate_image_description(
-                    model=CHEAP_MODEL,
-                    image_content=chunk.image_content
-                )
-                chunk.text_content = image_description
-
-            # create content for ai summary generation
-            chunk_content = ""
-            if chunk.chunk_type == ChunkType.TABLE:
-                chunk_content = chunk.table_content_markdown
-            else:
-                chunk_content = chunk.text_content
-            part = types.Part.from_text(text=chunk_content)
-            content = types.Content(parts=[part], role="user")
-
-            summary = await _generate_content(
-                model=CHEAP_MODEL,
-                messages=[content],
-                cache_name=cache_name
-            )
-
-            chunk.summary = summary
+        semaphore = asyncio.Semaphore(CHUNK_SUMMARY_CONCURRENCY)
+        await asyncio.gather(*(
+            _summarize_one_chunk(chunk=chunk, cache_name=cache_name, semaphore=semaphore)
+            for chunk in chunks
+        ))
     except Exception as e:
         logger.error("summarize_chunks : error summarizing chunks")
         raise
+
+
+
+async def _summarize_one_chunk(chunk: Chunk, cache_name: str, semaphore: asyncio.Semaphore):
+    async with semaphore:
+        # generate image description before summarizing
+        if chunk.chunk_type == ChunkType.IMAGE:
+            chunk.text_content = await _generate_image_description(
+                model=CHEAP_MODEL,
+                image_content=chunk.image_content
+            )
+
+        # create content for ai summary generation
+        chunk_content = ""
+        if chunk.chunk_type == ChunkType.TABLE:
+            chunk_content = chunk.table_content_markdown
+        else:
+            chunk_content = chunk.text_content
+        part = types.Part.from_text(text=chunk_content)
+        content = types.Content(parts=[part], role="user")
+
+        chunk.summary = await _generate_content(
+            model=CHEAP_MODEL,
+            messages=[content],
+            cache_name=cache_name
+        )
 
 
 
