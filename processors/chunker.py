@@ -2,9 +2,10 @@ import io
 import logging
 from PIL import Image
 from docling.chunking import HybridChunker
-from docling.document_converter import DocumentConverter
-from docling.datamodel.base_models import DocumentStream
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.datamodel.base_models import DocumentStream, InputFormat
 from docling.datamodel.document import ConversionResult
+from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling_core.types.doc import (
     DoclingDocument,
     TableItem,
@@ -22,10 +23,11 @@ from models.file import FileSource
 logger = logging.getLogger(__name__)
 
 
-TOKENIZER_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-MAX_TOKENIZER_TOKENS = 256
-CHUNK_SIZE = 400
+TOKENIZER_MODEL_NAME = "nomic-ai/nomic-embed-text-v2-moe"
+MAX_TOKENIZER_TOKENS = 768
+CHUNK_SIZE = 600
 CHUNK_OVERLAP = 50
+PDF_IMAGES_SCALE = 2.0
 
 
 
@@ -67,8 +69,22 @@ def _create_chunker() -> HybridChunker:
 
 
 
+def _create_converter() -> DocumentConverter:
+    pdf_pipeline_options = PdfPipelineOptions()
+    pdf_pipeline_options.generate_picture_images = True
+    pdf_pipeline_options.generate_page_images = True
+    pdf_pipeline_options.images_scale = PDF_IMAGES_SCALE
+
+    return DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_pipeline_options),
+        }
+    )
+
+
+
 async def _convert_to_docling_file(file_source : FileSource) -> ConversionResult:
-    converter = DocumentConverter()
+    converter = _create_converter()
     try:
         result = converter.convert(file_source.file_path)
         return result

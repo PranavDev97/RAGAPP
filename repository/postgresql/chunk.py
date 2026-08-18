@@ -40,7 +40,7 @@ def _cutoff_by_score_gap(rows: list, score_gap: float) -> list:
 async def get_chunks_by_similarity(
     doc_id: int,
     vector: list[float],
-    min_similarity: float = 0.3,
+    min_similarity: float = 0.5,
     score_gap: float = 0.15,
 ) -> list[tuple[int, str]]:
     """

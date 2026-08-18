@@ -4,11 +4,14 @@ import mimetypes
 from pathlib import Path
 from typing import Optional
 from io import BytesIO
+from typing import Type
 from PIL import Image
+from pydantic import BaseModel
 from google import genai
 from google.genai import types
 from models.chunk import Chunk, ChunkType
 from models.file import FileSource
+from models.ai import SearchStatementAIResponse
 
 
 logger = logging.getLogger(__name__)
@@ -27,13 +30,35 @@ You are provided with a full document and a specific chunk extracted from it. Yo
 
 Identify key entities (such as people, institutions, concepts, or objects) present in the chunk, and briefly explain their specific role, relevance, and connection to the events or ideas described in that chunk.
 
-Limit your response to 600 tokens. Output only this contextual summary and entity explanations as single paragraph in plain text — do not include any additional commentary or introductory text.
+Limit your response to 400 tokens. Output only this contextual summary and entity explanations as single paragraph in plain text — do not include any additional commentary or introductory text.
 """
 IMAGE_DESCRIPTION_SYSTEM_INSTRUCTION = """
 You are given an image. Create a detailed description of the image such that no details of the image is missed. Always include any text inside the image in the decription being generated and explain its usage within the image.
 """
 SEARCH_STATEMENT_SYSTEM_INSTRUCTION="""
-You are given a question and a file summary. Convert the question into a statement in plaint text using the file summary as a context for better semantic search retrieval of valid chunks of the same document.
+You are given a user question and a summary of a document. Your task is to rewrite the question as a plain-text declarative statement, using the file summary as context so the 
+statement is optimized for semantic search retrieval of relevant chunks from that document.
+
+Instructions:
+
+1. Statement generation
+   - Rewrite the question as an affirmative, declarative statement (not a question).
+   - Use terminology, entities, and phrasing consistent with the file summary so the 
+     statement semantically aligns with how the source document likely discusses the topic.
+   - Do not introduce facts, numbers, or claims that are not implied by the question or 
+     the file summary.
+
+2. Confidence score
+   - Assign a confidence_score between 0.1 and 1.0 that reflects how complete an answer 
+     the statement itself is:
+     - If the statement is useful only as a search query (i.e., it does not itself answer 
+       the question and further chunk retrieval is required), assign a score close to 0.1.
+     - If the statement is a complete, accurate, and self-contained answer to the question 
+       based solely on the file summary, assign a score close to 1.0.
+   - Only assign a score above 0.8 if the statement could be used directly as the final 
+     answer to the user's question, with no further chunk retrieval needed.
+   - Do not assign a score above 0.8 if any additional information from the document 
+     would be needed to fully answer the question.
 """
 DOCUMENT_ANSWERING_SYSTEM_INSTRUCTION = """
 You are given a question and the relevant chunk contents from a document. Generate the most apt answer to the question in simple words.
@@ -115,6 +140,39 @@ async def _generate_content(model: str, messages : list[types.Content],
 
 
 
+async def _generate_content_structured(model: str, messages: list[types.Content],
+                                        out_schema:  Type[BaseModel], system_instruction: Optional[str]=None, 
+                                        cache_name: Optional[str]=None
+) -> Type[BaseModel]:
+    """
+        Generates AI content as the given out_schema object based on the input messages given
+    """
+    config_params = {
+        "temperature": 0.2,
+        "max_output_tokens": 10000,
+        "response_mime_type": "application/json",
+        "response_schema": out_schema,
+    }
+    
+    if cache_name:
+        config_params["cached_content"] = cache_name
+    if system_instruction:
+        config_params["system_instruction"] = system_instruction
+
+    try:
+        response = ai_client.models.generate_content(
+            model=model,
+            contents=messages,
+            config=types.GenerateContentConfig(**config_params)
+        )
+
+        return response.parsed
+    except Exception as e:
+        logger.error("_generate_content_structured : error generating content", extra={"error": str(e)})
+        raise
+    
+
+    
 async def summarize_file(file_source: FileSource) -> str :
     """
         Summarizes the entire document
@@ -152,7 +210,7 @@ async def summarize_chunks(chunks : list[Chunk], file_source: FileSource):
             if chunk.chunk_type == ChunkType.IMAGE:
                 image_description = await _generate_image_description(
                     model=CHEAP_MODEL,
-                    content=chunk.image_content
+                    image_content=chunk.image_content
                 )
                 chunk.text_content = image_description
 
@@ -197,7 +255,7 @@ async def _generate_image_description(model: str, image_content : Image.Image) -
 
 
 
-async def generate_search_statement(question: str, summary: str) -> str:
+async def generate_search_statement(question: str, summary: str) -> SearchStatementAIResponse:
     """
         Generates a better search statement corresponding to the question using the file summary as a context
     """
@@ -210,13 +268,14 @@ async def generate_search_statement(question: str, summary: str) -> str:
     summary_part = types.Part.from_text(text=f"File Summary \n"+summary)
     messages.append(types.Content(parts=[summary_part], role="user"))
 
-    search_statement = await _generate_content(
+    search_statement_info = await _generate_content_structured(
         model=CHEAP_MODEL,
         messages=messages,
+        out_schema=SearchStatementAIResponse,
         system_instruction=SEARCH_STATEMENT_SYSTEM_INSTRUCTION
     )
 
-    return search_statement
+    return search_statement_info
 
     
 

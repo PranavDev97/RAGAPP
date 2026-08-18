@@ -61,7 +61,15 @@ async def _insert_processed_file_data_to_db(file_source: FileSource, chunks: lis
 
 
 async def chat(question: str, doc_id: int) -> tuple[str, list[int]]:
-    hyde = await _generate_hyde(question=question, doc_id=doc_id)
+    file_summary = await get_file_summary(doc_id=doc_id)
+
+    search_statement_info = await generate_search_statement(question=question, summary=file_summary)
+
+    # if the generated search statement has a high confidence score return the statement w/o further retrieval
+    if search_statement_info.confidence_score > 0.8:
+            return search_statement_info.statement, None
+
+    hyde = await create_search_statement_embedding(search_statement=search_statement_info.statement)
 
     chunk_info = await get_chunks_by_similarity(
         doc_id=doc_id,
@@ -81,26 +89,3 @@ async def chat(question: str, doc_id: int) -> tuple[str, list[int]]:
     chunk_meta = [(c[0],c[2]) for c in chunk_info]
 
     return answer, chunk_meta
-
-
-
-async def _generate_hyde(question: str, doc_id: int) -> list[float]:
-    """
-        Generate Hypothetical Document Embedding for better semantic search
-    """
-    file_summary = await get_file_summary(doc_id=doc_id)
-
-    search_statement = await generate_search_statement(question=question, summary=file_summary)
-
-    print(f"search statement : {search_statement}")
-
-    hyde = await create_search_statement_embedding(search_statement=search_statement)
-
-    return hyde
-
-
-
-
-
-
-    
