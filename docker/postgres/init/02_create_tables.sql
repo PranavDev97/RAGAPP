@@ -13,7 +13,10 @@ CREATE TABLE document_chunk (
     chunk_text TEXT NOT NULL,
     chunk_type TEXT NOT NULL,
     chunk_summary TEXT NOT NULL,
-    chunk_embedding VECTOR(768)
+    chunk_embedding VECTOR(768),
+    chunk_tsvector TSVECTOR
+        GENERATED ALWAYS AS (to_tsvector('english', chunk_text)) STORED
 );
 
-CREATE INDEX idx_document_chunk_embedding ON document_chunk USING hnsw(chunk_embedding vector_cosine_ops)
+CREATE INDEX idx_document_chunk_embedding ON document_chunk USING hnsw(chunk_embedding vector_cosine_ops);
+CREATE INDEX document_chunk_tsvector_idx ON document_chunk USING GIN (chunk_tsvector);

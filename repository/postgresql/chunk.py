@@ -20,6 +20,17 @@ GET_CHUNKS_BY_SIMILARITY_QUERY = """
       AND 1 - (chunk_embedding <=> $2::vector) > $3
     ORDER BY score DESC
 """
+GET_CHUNKS_BY_KEYWORD_QUERY = """
+    SELECT
+        chunk_index,
+        chunk_text,
+        ts_rank(chunk_tsvector, websearch_to_tsquery('english', $2)) as score
+    FROM document_chunk
+    WHERE doc_id = $1
+      AND chunk_tsvector @@ websearch_to_tsquery('english', $2)
+      AND ts_rank(chunk_tsvector, websearch_to_tsquery('english', $2)) > $3
+    ORDER BY score DESC
+"""
 
 
 
@@ -92,4 +103,31 @@ async def insert_chunks(doc_id: int, chunks: list[Chunk]) -> None:
         logger.error("insert_chunks : error inserting chunks", extra={"error": str(e)})
         raise
 
+
+
+async def get_chunks_by_keyword(
+    doc_id: int,
+    question: str,
+    min_rank: float = 0.01,
+    score_gap: float = 0.15,
+) -> list[tuple[int, str, float]]:
+    """
+        Retrieves (chunk_index, chunk_text) for chunks of the given doc_id whose
+        chunk_tsvector matches the given question via full-text keyword search
+        and whose ts_rank exceeds min_rank, then trims the result to the leading
+        cluster of top scores: chunks are kept in descending score order until a
+        consecutive score drop bigger than score_gap is found.
+    """
+    try:
+        pg_pool = get_postgres_client()
+
+        async with pg_pool.acquire() as conn:
+            rows = await conn.fetch(GET_CHUNKS_BY_KEYWORD_QUERY, doc_id, question, min_rank)
+
+        rows = _cutoff_by_score_gap(rows, score_gap)
+
+        return [(row["chunk_index"], row["chunk_text"], row["score"]) for row in rows]
+    except Exception as e:
+        logger.error("get_chunks_by_keyword : error retrieving chunks", extra={"error": str(e)})
+        raise
 
