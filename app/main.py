@@ -1,4 +1,5 @@
 import os
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from dotenv import load_dotenv
@@ -11,6 +12,11 @@ from processors.embedder import create_embed_model
 from repository.postgresql.common import create_postgres_client
 
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+)
 
 
 @asynccontextmanager
