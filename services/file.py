@@ -19,7 +19,7 @@ from repository.postgresql.chunk import (
     get_chunks_by_similarity,
     get_chunks_by_keyword,
 )
-
+from repository.postgresql.user import insert_user_document
 
 
 UPLOAD_DIR = Path("files/chat")
@@ -27,7 +27,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 
-async def upload_and_process(file_source: FileSource) -> int:
+async def upload_and_process(user_id: int, file_source: FileSource) -> int:
     # Save file
     file_path = UPLOAD_DIR / file_source.name
     file_source.file_path = file_path
@@ -47,13 +47,19 @@ async def upload_and_process(file_source: FileSource) -> int:
     # Create chunk summary embeddings
     create_chunk_summary_embeddings(chunks=chunks)
 
-    doc_id = await _insert_processed_file_data_to_db(file_source=file_source, chunks=chunks)
+    # Insert all file date to db
+    doc_id = await _insert_processed_file_data_to_db(
+        user_id=user_id, 
+        file_source=file_source, 
+        chunks=chunks
+    )
 
     return doc_id
 
 
 
-async def _insert_processed_file_data_to_db(file_source: FileSource, chunks: list[Chunk]) -> int:
+# TODO : check how to perform a transactional insertion
+async def _insert_processed_file_data_to_db(user_id: int, file_source: FileSource, chunks: list[Chunk]) -> int:
     doc_id = await insert_document_source(
         name=file_source.name, 
         file_path=file_source.file_path,
@@ -61,11 +67,13 @@ async def _insert_processed_file_data_to_db(file_source: FileSource, chunks: lis
     )
     await insert_chunks(doc_id=doc_id, chunks=chunks)
 
+    await insert_user_document(user_id=user_id, doc_id=doc_id)
+
     return doc_id
 
 
 
-async def chat(question: str, doc_id: int) -> tuple[str, list[tuple[int, float]]]:
+async def chat(doc_id: int, question: str) -> tuple[str, list[tuple[int, float]]]:
     file_summary = await get_file_summary(doc_id=doc_id)
 
     search_statement_info = await generate_search_statement(question=question, summary=file_summary)
