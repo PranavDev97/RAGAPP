@@ -34,11 +34,11 @@ async def lifespan(app: FastAPI):
     )
     await create_embed_model()
     await create_postgres_client(
-        user=os.environ.get("POSTGRES_USER", "admin"),
-        password=os.environ.get("POSTGRES_PASSWORD", "password"),
-        database=os.environ.get("POSTGRES_DB", "rag"),
-        host=os.environ.get("POSTGRES_HOST", "localhost"),
-        port=int(os.environ.get("POSTGRES_PORT", "5432")),
+        user=os.environ.get("POSTGRES_USER"),
+        password=os.environ.get("POSTGRES_PASSWORD"),
+        database=os.environ.get("POSTGRES_DB"),
+        host=os.environ.get("POSTGRES_HOST"),
+        port=int(os.environ.get("POSTGRES_PORT")),
     )
 
     app.state.up_since = datetime.now(timezone.utc)

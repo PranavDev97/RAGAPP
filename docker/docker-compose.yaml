@@ -8,11 +8,35 @@ services:
       POSTGRES_DB: rag
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: password
-    ports:
-      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+
+  app:
+    build:
+      context: ..
+      dockerfile: docker/app/dockerfile
+    restart: unless-stopped
+    env_file:
+      - ../conf/local.env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+    ports:
+      - "8000:8000"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   pgdata:
+  hf_cache:
