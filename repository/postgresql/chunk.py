@@ -11,25 +11,55 @@ INSERT_CHUNK_QUERY = """
     VALUES ($1, $2, $3, $4, $5, $6::vector)
 """
 GET_CHUNKS_BY_SIMILARITY_QUERY = """
+    WITH scored_chunks AS (
+        SELECT
+            chunk_index,
+            chunk_text,
+            1 - (chunk_embedding <=> $2::vector) AS score
+        FROM 
+            document_chunk
+        WHERE 
+            doc_id = $1
+    ),
+    threshold AS (
+        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY score) AS median_score
+        FROM scored_chunks
+    )
     SELECT
-        chunk_index,
-        chunk_text,
-        1 - (chunk_embedding <=> $2::vector) as score
-    FROM document_chunk
-    WHERE doc_id = $1
-      AND 1 - (chunk_embedding <=> $2::vector) > $3
-    ORDER BY score DESC
+        sc.chunk_index,
+        sc.chunk_text,
+        sc.score
+    FROM 
+        scored_chunks sc, threshold t
+    WHERE 
+        sc.score > t.median_score
+    ORDER BY 
+        sc.score DESC;
 """
 GET_CHUNKS_BY_KEYWORD_QUERY = """
-    SELECT
-        chunk_index,
-        chunk_text,
-        ts_rank(chunk_tsvector, websearch_to_tsquery('english', $2)) as score
-    FROM document_chunk
-    WHERE doc_id = $1
-      AND chunk_tsvector @@ websearch_to_tsquery('english', $2)
-      AND ts_rank(chunk_tsvector, websearch_to_tsquery('english', $2)) > $3
-    ORDER BY score DESC
+    WITH scored_chunks AS (
+        SELECT
+            chunk_index,
+            chunk_text,
+            ts_rank(chunk_tsvector, websearch_to_tsquery('english', $2)) AS score
+        FROM 
+            document_chunk
+        WHERE 
+            doc_id = $1
+            AND chunk_tsvector @@ websearch_to_tsquery('english', $2)   
+    )
+    SELECT 
+        chunk_index, 
+        chunk_text, score
+    FROM 
+        scored_chunks
+    WHERE 
+        score > (
+            SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY score)
+            FROM scored_chunks
+        )
+    ORDER BY 
+        score DESC;
 """
 
 
@@ -51,7 +81,6 @@ def _cutoff_by_score_gap(rows: list, score_gap: float) -> list:
 async def get_chunks_by_similarity(
     doc_id: int,
     vector: list[float],
-    min_similarity: float = 0.5,
     score_gap: float = 0.15,
 ) -> list[tuple[int, str, float]]:
     """
@@ -108,7 +137,6 @@ async def insert_chunks(doc_id: int, chunks: list[Chunk]) -> None:
 async def get_chunks_by_keyword(
     doc_id: int,
     question: str,
-    min_rank: float = 0.01,
     score_gap: float = 0.15,
 ) -> list[tuple[int, str, float]]:
     """
