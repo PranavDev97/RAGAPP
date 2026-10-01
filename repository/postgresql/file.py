@@ -17,6 +17,17 @@ GET_FILE_SUMMARY_QUERY = """
     FROM document_source
     WHERE id = $1
 """
+INSERT_SESSION_INFO_QUERY = """
+    INSERT INTO session (user_id, doc_id)
+    VALUES ($1, $2)
+    RETURNING session_id
+"""
+GET_SESSION_CHAT_QUERY = """
+    SELECT chat
+    FROM session_chat
+    WHERE session_id = $1
+    ORDER BY created_at DESC
+"""
 
 
 
@@ -51,3 +62,21 @@ async def get_file_summary(doc_id: int) -> str:
     except Exception as e:
         logger.error("get_file_summary : error fetching file summary", extra={"error": str(e)})
         raise
+
+
+
+async def get_session_chats(session_id: str) -> list[str]:
+    """
+        Fetches all the chats belonging to the given session
+    """
+    try:
+        pg_pool = get_postgres_client()
+        
+        async with pg_pool.acquire() as conn:
+            rows = await conn.fetch(GET_SESSION_CHAT_QUERY, session_id)
+        
+        return [row["chat"] for row in rows]
+    except Exception as e:
+        logger.error("get_session_chats : error fetching session chats", extra={"error": str(e)})
+        raise
+

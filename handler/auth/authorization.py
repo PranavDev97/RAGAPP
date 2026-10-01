@@ -3,24 +3,29 @@ from typing import Annotated
 from fastapi import HTTPException, Depends
 from handler.auth.authentication import AuthenicatedUserId
 from repository.postgresql.user import check_user_has_doc
+from repository.redis.session import get_session_info
 
 
 logger = logging.getLogger(__name__)
 
 
-async def authorize_user_doc(user_id: AuthenicatedUserId, doc_id: int | None = None) -> int:
-    if doc_id is None:
+async def authorize_user_session(user_id: AuthenicatedUserId, session_id: str | None = None) -> int:
+    if session_id is None:
         raise HTTPException(status_code=400, detail="Document ID required")
 
     try:
+        session_user_id, doc_id = await get_session_info(session_id=session_id)
+        if session_user_id != user_id:
+            raise HTTPException(status_code=403, detail="Logged-in user does not have access to this session, it belongs to another user.")
+
         has_doc = await check_user_has_doc(user_id=user_id, doc_id=doc_id)
     except Exception as e:
         logger.error("authorize_user_doc : error checking document ownership", extra={"error": str(e)})
         raise HTTPException(status_code=500, detail="Error authorizing user")
 
     if not has_doc:
-        raise HTTPException(status_code=403, detail="You do not have access to this document")
+        raise HTTPException(status_code=403, detail="User does not have access to this document")
 
     return user_id
 
-AutherizededUserId = Annotated[int, Depends(authorize_user_doc)]
+AutherizededUserId = Annotated[int, Depends(authorize_user_session)]

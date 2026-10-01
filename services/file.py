@@ -9,7 +9,7 @@ from processors.embedder import (
 )
 from clients.ai import (
     summarize_file, 
-    summarize_chunks, 
+    enrich_chunks, 
     get_answer,
     generate_search_statement,
 )
@@ -20,6 +20,15 @@ from repository.postgresql.chunk import (
     get_chunks_by_keyword,
 )
 from repository.postgresql.user import insert_user_document
+from repository.redis.session import (
+    create_and_insert_session_info,
+    get_session_info,
+    get_session_chats,
+    add_chat_to_session,
+)
+from processors.compression import (
+    compress_answer
+)
 
 
 UPLOAD_DIR = Path("files/chat")
@@ -27,7 +36,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 
-async def upload_and_process(user_id: int, file_source: FileSource) -> int:
+async def upload_and_process(user_id: int, file_source: FileSource) -> str:
     # Save file
     file_path = UPLOAD_DIR / file_source.name
     file_source.file_path = file_path
@@ -42,7 +51,7 @@ async def upload_and_process(user_id: int, file_source: FileSource) -> int:
     chunks = await asyncio.to_thread(chunk, file_source)
 
     # Summarize chunks
-    await summarize_chunks(chunks=chunks, file_source=file_source)
+    await enrich_chunks(chunks=chunks, file_source=file_source)
 
     # Create chunk summary embeddings
     create_chunk_summary_embeddings(chunks=chunks)
@@ -54,7 +63,13 @@ async def upload_and_process(user_id: int, file_source: FileSource) -> int:
         chunks=chunks
     )
 
-    return doc_id
+    # Create a new session info for the user with the document
+    session_id = await create_and_insert_session_info(
+        user_id=user_id,
+        doc_id=doc_id
+    )
+
+    return session_id
 
 
 
@@ -73,10 +88,21 @@ async def _insert_processed_file_data_to_db(user_id: int, file_source: FileSourc
 
 
 
-async def chat(doc_id: int, question: str) -> tuple[str, list[tuple[int, float]]]:
+async def chat(session_id: str, question: str) -> tuple[str, list[tuple[int, float]]]:
+    _, doc_id = await get_session_info(session_id=session_id)
+
+    previous_chat_list = await get_session_chats(session_id=session_id)
+    previous_chats = "\n".join(chat for chat in previous_chat_list)
+    print(f"chats : \n",previous_chats)
+
     file_summary = await get_file_summary(doc_id=doc_id)
 
-    search_statement_info = await generate_search_statement(question=question, summary=file_summary)
+    search_statement_info = await generate_search_statement(
+        question=question, 
+        chat_history=previous_chats,
+        summary=file_summary,
+    )
+    print("search statement : ",search_statement_info.statement)
 
     # if the generated search statement has a high confidence score return the statement w/o further retrieval
     if search_statement_info.confidence_score > 0.8:
@@ -87,11 +113,21 @@ async def chat(doc_id: int, question: str) -> tuple[str, list[tuple[int, float]]
 
     fused_chunk_info = _reciprocal_rank_fusion([semantic_chunk_info, keyword_chunk_info])
     fused_chunk_info = _cutoff_by_elbow(fused_chunk_info)
-
+    fused_chunk_info.sort(key=lambda c: c[0])
+    
     chunk_texts = [c[1] for c in fused_chunk_info]
     answer = await get_answer(
         question=question,
-        chunk_texts=chunk_texts
+        retrieval_statement=search_statement_info.statement,
+        chunk_texts=chunk_texts,
+    )
+
+    compressed_answer = await compress_answer(answer=answer)
+
+    await add_chat_to_session(
+        session_id=session_id, 
+        question=question, 
+        answer=compressed_answer
     )
 
     chunk_meta = [(c[0], c[2]) for c in fused_chunk_info]

@@ -89,7 +89,9 @@ def _convert_to_docling_file(file_source : FileSource) -> ConversionResult:
         result = converter.convert(file_source.file_path)
         return result
     except Exception as e:
-        logger.error("_convert_to_docling_file : error converting to docling file", extra={"error" : str(e)})
+        logger.error(f"_convert_to_docling_file : error converting to docling file - {e}")
+        raise
+
 
 
 

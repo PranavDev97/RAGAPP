@@ -10,6 +10,9 @@ class ChunkType(str, Enum):
     TABLE = "table"
     IMAGE = "image"
 
+class ChunkMetadata(BaseModel):
+    name: Optional[str] = Field(None, description="The name used to identify the chunk content")
+
 class Chunk(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     chunk_type: ChunkType = Field(description="The type of content in the chunk.")
@@ -20,4 +23,5 @@ class Chunk(BaseModel):
     bbox: Optional[list[float]] = Field(None, description="The bounding box [x0, y0, x1, y1] on the source page.")
     summary: Optional[str] = Field(None, description="The summary of the chunk content")
     embedding: Optional[list[float]] = Field(None, description="The vector embedding representation of the summary")
+    metadata: Optional[ChunkMetadata] = Field(None, description="Additional metadata about the chunk")
 
