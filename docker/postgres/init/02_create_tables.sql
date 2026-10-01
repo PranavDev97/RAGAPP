@@ -21,6 +21,7 @@ CREATE TABLE document_chunk (
     chunk_type TEXT NOT NULL,
     chunk_summary TEXT NOT NULL,
     chunk_embedding VECTOR(768),
+    chunk_metadata JSONB NOT NULL,
     chunk_tsvector TSVECTOR
         GENERATED ALWAYS AS (to_tsvector('english', chunk_text)) STORED,
 

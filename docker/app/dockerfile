@@ -2,10 +2,17 @@ FROM python:3.14-slim
 
 WORKDIR /app
 
+# opencv-python (pulled in by docling-ibm-models) links against these X11/GTK
+# shared libs at import time even though we never render a window
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libxcb1 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 
 RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt
-
-COPY . .
-
-CMD ["uvicorn","app.main:app","--host","0.0.0.0","--port","8000"]
